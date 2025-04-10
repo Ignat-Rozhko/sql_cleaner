@@ -356,6 +356,53 @@ class TestWhereConditionRemoval(unittest.TestCase):
         self.assertNotIn("t1.active", processed)
         self.assertNotIn("t2.region", processed)
 
+    def test_complex_where_with_multiple_target_references(self):
+        """Test WHERE condition with multiple references to the target table"""
+        sql = """
+        SELECT * FROM product p
+        WHERE (target_id IS NOT NULL OR p.price > 0) AND p.target_id != 10;
+        """
+        
+        # Process with 'target' table
+        processed = self.processor.process_sql_content(sql, ['target'])
+        
+        # The result should preserve p.price > 0 and remove all target_id references
+        self.assertEqual("SELECT * FROM product p WHERE p.price > 0;", processed.strip())
+        self.assertNotIn("target_id", processed.lower())
+        self.assertNotIn("p.target_id", processed.lower())
+
+    def test_between_condition_removal(self):
+        """Test WHERE condition with BETWEEN operator to ensure proper removal"""
+        sql = """
+        SELECT * FROM product p
+        WHERE target_id BETWEEN 1 AND 2 AND another_column IS NOT NULL;
+        """
+        
+        # Process with 'target' table
+        processed = self.processor.process_sql_content(sql, ['target'])
+        
+        # The entire BETWEEN expression should be removed, leaving only the other condition
+        self.assertEqual("SELECT * FROM product p WHERE another_column IS NOT NULL;", processed.strip())
+        self.assertNotIn("BETWEEN", processed.upper())
+        self.assertNotIn("target_id", processed.lower())
+        
+    def test_between_condition_with_complex_values(self):
+        """Test WHERE with BETWEEN with more complex values"""
+        sql = """
+        SELECT * FROM product p
+        WHERE p.target_id BETWEEN CAST('2023-01-01' AS DATE) AND CAST('2023-12-31' AS DATE) 
+        AND p.price > 100;
+        """
+        
+        # Process with 'target' table
+        processed = self.processor.process_sql_content(sql, ['target'])
+        
+        # The entire BETWEEN expression should be removed, leaving only the price condition
+        self.assertEqual("SELECT * FROM product p WHERE p.price > 100;", processed.strip())
+        self.assertNotIn("BETWEEN", processed.upper())
+        self.assertNotIn("target_id", processed.lower())
+        self.assertNotIn("CAST", processed.upper())
+
 
 if __name__ == '__main__':
     unittest.main() 

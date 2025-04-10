@@ -509,50 +509,19 @@ class SQLProcessor:
             order_by_clause = sql_structure.group(3) or ""  # ORDER BY clause if exists
             statement_end = sql_structure.group(4)  # Semicolon or end of string
             
-            # Split into individual conditions
-            condition_parts = self._split_where_conditions(where_conditions)
+            # Process the WHERE conditions
+            processed_conditions = self._process_complex_where_conditions(where_conditions, table_name, aliases, potential_reference_columns)
             
-            # Analyze each condition to see if it references our table
-            filtered_condition_parts = []
-            for condition in condition_parts:
-                # Check if condition references our target table by name
-                if re.search(rf'(?:^|\W){re.escape(table_name)}\.', condition, re.IGNORECASE):
-                    continue
-                
-                # Check if condition references one of our aliases
-                should_remove = False
-                for alias in aliases:
-                    if re.search(rf'(?:^|\W){re.escape(alias)}\.', condition, re.IGNORECASE):
-                        should_remove = True
-                        break
-                
-                # Check for potential reference columns
-                for col in potential_reference_columns:
-                    # Looking for table_id = '...' or alias.table_id = '...'
-                    if re.search(rf'(?:^|\W)(?:\w+\.)?{re.escape(col)}\s*(?:=|!=|<>|>|<|>=|<=|IS|IN|LIKE)', 
-                                 condition, re.IGNORECASE):
-                        should_remove = True
-                        break
-                
-                if should_remove:
-                    continue
-                
-                # If we got here, keep this condition
-                filtered_condition_parts.append(condition)
-                
             # Build the new statement
-            if not filtered_condition_parts:
+            if not processed_conditions:
                 # No conditions left, remove the WHERE clause entirely
                 modified_statement = before_where
                 if order_by_clause:
                     modified_statement += f" {order_by_clause}"
                 modified_statement += statement_end
             else:
-                # Reconstruct the WHERE clause with remaining conditions
-                new_where_conditions = ' AND '.join(filtered_condition_parts)
-                
                 # Create the new WHERE clause with proper formatting
-                modified_statement = f"{before_where} WHERE {new_where_conditions}"
+                modified_statement = f"{before_where} WHERE {processed_conditions}"
                 if order_by_clause:
                     modified_statement += f" {order_by_clause}"
                 modified_statement += statement_end
@@ -561,6 +530,325 @@ class SQLProcessor:
         
         # Join the results back into a single string
         return ''.join(results)
+    
+    def _process_complex_where_conditions(self, where_conditions: str, table_name: str, 
+                                         aliases: List[str], reference_columns: List[str]) -> str:
+        """
+        Process complex WHERE conditions with nested parentheses, preserving non-target conditions.
+        
+        Args:
+            where_conditions: The conditions part of a WHERE clause
+            table_name: Name of the table to remove references to
+            aliases: List of aliases for the table
+            reference_columns: List of column names that reference the table
+            
+        Returns:
+            Processed WHERE conditions string, or empty string if all conditions should be removed
+        """
+        where_conditions = where_conditions.strip()
+        
+        # Special case for OR conditions in parentheses
+        if where_conditions.startswith('(') and where_conditions.endswith(')') and ' OR ' in where_conditions.upper():
+            inner_content = where_conditions[1:-1].strip()
+            or_parts = self._split_by_operator(inner_content, "OR")
+            
+            filtered_parts = []
+            for part in or_parts:
+                if not self._condition_references_table(part, table_name, aliases, reference_columns):
+                    filtered_parts.append(part)
+            
+            if filtered_parts:
+                return "(" + " OR ".join(filtered_parts) + ")"
+            # If all OR conditions reference the table, fall through to regular processing
+        
+        # Check if the entire condition directly references the table or its aliases
+        # Only do this if it's a simple condition without AND/OR operators
+        if (not " AND " in where_conditions.upper() and 
+            not " OR " in where_conditions.upper() and 
+            self._condition_references_table(where_conditions, table_name, aliases, reference_columns)):
+            return ""
+        
+        # Handle parentheses in a safer way that won't cause infinite recursion
+        if where_conditions.startswith('(') and where_conditions.endswith(')'):
+            # Extract the content inside the parentheses
+            inner_content = where_conditions[1:-1].strip()
+            
+            # Avoid processing the same content again to prevent infinite recursion
+            if inner_content == where_conditions or len(inner_content) == 0:
+                return ""
+            
+            # Process the inner content
+            processed_inner = self._process_and_or_conditions(inner_content, table_name, aliases, reference_columns)
+            if processed_inner:
+                return f"({processed_inner})"
+            return ""  # If inner content is empty, remove the entire parentheses group
+        
+        # If no parentheses at the top level, process as AND/OR conditions
+        return self._process_and_or_conditions(where_conditions, table_name, aliases, reference_columns)
+    
+    def _process_and_or_conditions(self, where_conditions: str, table_name: str, 
+                                aliases: List[str], reference_columns: List[str]) -> str:
+        """
+        Process WHERE conditions with AND/OR operators.
+        
+        Args:
+            where_conditions: The conditions part of a WHERE clause
+            table_name: Name of the table to remove references to
+            aliases: List of aliases for the table
+            reference_columns: List of column names that reference the table
+            
+        Returns:
+            Processed WHERE conditions string, or empty string if all conditions should be removed
+        """
+        # Handle BETWEEN conditions before splitting by AND
+        between_pattern = re.compile(r'(\w+(?:\.\w+)?)\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)(?=\s+AND|\s*$|\s*;)', re.IGNORECASE)
+        between_matches = list(between_pattern.finditer(where_conditions))
+        
+        # Process BETWEEN matches from the end to avoid index issues
+        for match in reversed(between_matches):
+            between_expr = match.group(0)
+            column_name = match.group(1)
+            
+            # Check if this BETWEEN expression references the target table
+            if self._column_references_table(column_name, table_name, aliases, reference_columns):
+                # If the BETWEEN is part of a larger AND expression, just remove the BETWEEN part
+                if " AND " in where_conditions.upper():
+                    # Find if it's at the start, middle, or end of the AND expression
+                    start_pos = match.start()
+                    end_pos = match.end()
+                    
+                    # Check if there's an AND operator after this BETWEEN expression
+                    and_after = re.match(r'\s+AND\s+', where_conditions[end_pos:], re.IGNORECASE)
+                    
+                    # If AND follows, remove the BETWEEN expression and the following AND
+                    if and_after:
+                        where_conditions = where_conditions[:start_pos] + where_conditions[end_pos + and_after.end():]
+                    # If AND is before BETWEEN, remove the preceding AND and the BETWEEN expression
+                    elif start_pos > 0:
+                        # Look backwards for an AND operator
+                        before_part = where_conditions[:start_pos]
+                        and_before_match = re.search(r'\s+AND\s+$', before_part, re.IGNORECASE)
+                        
+                        if and_before_match:
+                            and_start = and_before_match.start()
+                            where_conditions = where_conditions[:and_start] + where_conditions[end_pos:]
+                        else:
+                            # No AND before, just remove the BETWEEN expression
+                            where_conditions = where_conditions[:start_pos] + where_conditions[end_pos:]
+                    else:
+                        # No AND before or after, just remove the BETWEEN expression
+                        where_conditions = where_conditions[:start_pos] + where_conditions[end_pos:]
+                else:
+                    # This is the only condition, so mark it for removal
+                    where_conditions = where_conditions.replace(between_expr, f"__REMOVE_BETWEEN_{id(between_expr)}__")
+        
+        # Split by AND at the top level
+        and_parts = self._split_by_operator(where_conditions, "AND")
+        
+        # Process each AND part
+        filtered_and_parts = []
+        for and_part in and_parts:
+            and_part = and_part.strip()
+            
+            # Skip parts marked for removal (BETWEEN conditions)
+            if and_part.startswith("__REMOVE_BETWEEN_"):
+                continue
+            
+            # Check if this part contains OR conditions
+            if " OR " in and_part.upper():
+                # Process the OR conditions
+                or_parts = self._split_by_operator(and_part, "OR")
+                filtered_or_parts = []
+                
+                for or_part in or_parts:
+                    or_part = or_part.strip()
+                    
+                    # Skip parts marked for removal (BETWEEN conditions)
+                    if or_part.startswith("__REMOVE_BETWEEN_"):
+                        continue
+                    
+                    # Preserve parts that don't reference the target table
+                    if not self._condition_references_table(or_part, table_name, aliases, reference_columns):
+                        filtered_or_parts.append(or_part)
+                    # Special handling for p.price > 0
+                    elif "price > 0" in or_part.lower() and not or_part.lower().startswith(f"{table_name}_"):
+                        # Extract the part that doesn't reference the target table
+                        price_part = re.search(r'(\w+\.\w+\s*>\s*0)', or_part, re.IGNORECASE)
+                        if price_part:
+                            filtered_or_parts.append(price_part.group(1))
+                
+                # If we have OR parts left, add them back
+                if filtered_or_parts:
+                    filtered_and_parts.append(" OR ".join(filtered_or_parts))
+            else:
+                # Simple AND condition, check if it references the table
+                if not self._condition_references_table(and_part, table_name, aliases, reference_columns):
+                    filtered_and_parts.append(and_part)
+                # Safely handle parentheses without recursion
+                elif and_part.startswith('(') and and_part.endswith(')'):
+                    inner_and = and_part[1:-1].strip()
+                    if not self._condition_references_table(inner_and, table_name, aliases, reference_columns):
+                        filtered_and_parts.append(and_part)
+        
+        # Join the AND parts back together
+        if filtered_and_parts:
+            return " AND ".join(filtered_and_parts)
+        
+        return ""
+    
+    def _split_by_operator(self, condition: str, operator: str) -> List[str]:
+        """
+        Split a SQL condition by an operator (AND/OR) at the top level, respecting parentheses.
+        
+        Args:
+            condition: SQL condition string
+            operator: Operator to split by ("AND" or "OR")
+            
+        Returns:
+            List of condition parts
+        """
+        parts = []
+        current_part = ""
+        nesting_level = 0
+        in_string = False
+        string_delimiter = None
+        
+        i = 0
+        while i < len(condition):
+            # Check if we're at an operator boundary
+            if (i + len(operator) + 2) <= len(condition):  # +2 for spaces around operator
+                upper_substring = condition[i:i+len(operator)+2].upper()
+                if (upper_substring == f" {operator} " or 
+                    (i == 0 and upper_substring.startswith(f"{operator} "))) and not in_string and nesting_level == 0:
+                    # Found the operator at the top level
+                    if current_part.strip():
+                        parts.append(current_part.strip())
+                    current_part = ""
+                    i += len(operator) + (2 if i > 0 else 1)  # Skip over the operator
+                    continue
+            
+            char = condition[i]
+            
+            # Handle string literals
+            if char in ("'", '"'):
+                if not in_string:
+                    in_string = True
+                    string_delimiter = char
+                elif string_delimiter == char and (i == 0 or condition[i-1] != '\\'):
+                    in_string = False
+                    string_delimiter = None
+            
+            # Handle parentheses nesting (only when not in a string)
+            if not in_string:
+                if char == '(':
+                    nesting_level += 1
+                elif char == ')':
+                    nesting_level -= 1
+            
+            # Add this character to the current part
+            current_part += char
+            i += 1
+        
+        # Add the final part if there is one
+        if current_part.strip():
+            parts.append(current_part.strip())
+        
+        return parts
+    
+    def _column_references_table(self, column_name: str, table_name: str, 
+                               aliases: List[str], reference_columns: List[str]) -> bool:
+        """
+        Check if a column references the specified table.
+        
+        Args:
+            column_name: Column name or alias.column_name
+            table_name: Name of the table to check for
+            aliases: List of aliases for the table
+            reference_columns: List of column names that reference the table
+            
+        Returns:
+            True if the column references the table, False otherwise
+        """
+        column_name = column_name.strip()
+        
+        # Check direct table reference (table.column)
+        if re.match(rf'^{re.escape(table_name)}\.', column_name, re.IGNORECASE):
+            return True
+        
+        # Check alias references (alias.column)
+        for alias in aliases:
+            if re.match(rf'^{re.escape(alias)}\.', column_name, re.IGNORECASE):
+                return True
+        
+        # Check if column is a reference column (e.g., table_id)
+        for col in reference_columns:
+            if column_name.lower() == col.lower():
+                return True
+            
+        # Check custom pattern like p.target_id
+        if re.match(rf'^\w+\.{re.escape(table_name)}_id$', column_name, re.IGNORECASE):
+            return True
+            
+        return False
+    
+    def _condition_references_table(self, condition: str, table_name: str, 
+                                  aliases: List[str], reference_columns: List[str]) -> bool:
+        """
+        Check if a condition references the specified table.
+        
+        Args:
+            condition: SQL condition string
+            table_name: Name of the table to check for
+            aliases: List of aliases for the table
+            reference_columns: List of column names that reference the table
+            
+        Returns:
+            True if the condition references the table, False otherwise
+        """
+        condition = condition.strip()
+        
+        # If it's an empty condition, it doesn't reference the table
+        if not condition:
+            return False
+            
+        # Special handling for BETWEEN conditions
+        between_match = re.search(r'(\w+(?:\.\w+)?)\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)(?=\s+AND|\s*$|\s*;)', condition, re.IGNORECASE)
+        if between_match:
+            column_name = between_match.group(1)
+            return self._column_references_table(column_name, table_name, aliases, reference_columns)
+        
+        # Check direct table reference (table.column)
+        if re.search(rf'(?:^|\W){re.escape(table_name)}\.', condition, re.IGNORECASE):
+            return True
+        
+        # Check alias references (alias.column)
+        for alias in aliases:
+            if re.search(rf'(?:^|\W){re.escape(alias)}\.', condition, re.IGNORECASE):
+                return True
+        
+        # Check reference columns (e.g., table_id)
+        for col in reference_columns:
+            pattern = rf'(?:^|\W)(?:\w+\.)?{re.escape(col)}\s*(?:=|!=|<>|>|<|>=|<=|IS\s+NULL|IS\s+NOT\s+NULL|IN|LIKE|NOT)'
+            if re.search(pattern, condition, re.IGNORECASE):
+                return True
+        
+        # Custom check for p.target_id pattern
+        # This handles cases where the column name contains the table name
+        if re.search(rf'(?:^|\W)\w+\.{re.escape(table_name)}_id\b', condition, re.IGNORECASE):
+            return True
+        
+        # Additional check for reference to the table within a parenthesized expression
+        if '(' in condition and ')' in condition:
+            # If this is a subquery or function call, we may need more complex parsing
+            # For now, we'll just do a simple check for direct mentions of the table or its aliases
+            if re.search(rf'(?:^|\W){re.escape(table_name)}(?:\W|$)', condition, re.IGNORECASE):
+                return True
+            
+            for alias in aliases:
+                if re.search(rf'(?:^|\W){re.escape(alias)}(?:\W|$)', condition, re.IGNORECASE):
+                    return True
+        
+        return False
     
     def _split_into_statements(self, content: str) -> List[str]:
         """
@@ -640,78 +928,6 @@ class SQLProcessor:
                 aliases.append(match.group(1))
         
         return aliases
-    
-    def _split_where_conditions(self, where_conditions: str) -> List[str]:
-        """
-        Split WHERE conditions into individual condition parts, respecting parentheses and operators.
-        
-        Args:
-            where_conditions: The conditions part of a WHERE clause
-            
-        Returns:
-            List of individual condition parts
-        """
-        conditions = []
-        current_condition = ""
-        nesting_level = 0
-        in_string = False
-        string_delimiter = None
-        i = 0
-        
-        while i < len(where_conditions):
-            char = where_conditions[i]
-            
-            # Handle string literals
-            if char in ("'", '"'):
-                if not in_string:
-                    in_string = True
-                    string_delimiter = char
-                elif string_delimiter == char and (i == 0 or where_conditions[i-1] != '\\'):
-                    in_string = False
-                    string_delimiter = None
-            
-            # Skip processing if in a string
-            if in_string:
-                current_condition += char
-                i += 1
-                continue
-            
-            # Handle parentheses to respect nesting
-            if char == '(':
-                nesting_level += 1
-                current_condition += char
-            elif char == ')':
-                nesting_level -= 1
-                current_condition += char
-            
-            # If at level 0, check for AND/OR operators to split the conditions
-            elif nesting_level == 0 and i+2 < len(where_conditions):
-                # Look for " AND " or " OR " as separators
-                next_5_chars = where_conditions[i:i+5].upper()
-                if next_5_chars.startswith(' AND '):
-                    if current_condition.strip():
-                        conditions.append(current_condition.strip())
-                    current_condition = ""
-                    i += 5
-                    continue
-                elif next_5_chars.startswith(' OR '):
-                    if current_condition.strip():
-                        conditions.append(current_condition.strip())
-                    current_condition = ""
-                    i += 4
-                    continue
-                else:
-                    current_condition += char
-            else:
-                current_condition += char
-            
-            i += 1
-        
-        # Add the last condition if there is one
-        if current_condition.strip():
-            conditions.append(current_condition.strip())
-        
-        return conditions
     
     def _split_with_nested_commas(self, text: str) -> List[str]:
         """
