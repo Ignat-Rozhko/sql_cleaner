@@ -575,16 +575,33 @@ class SQLProcessor:
         return modified_content
 
 
-def process_sql_files(directory: str, tables_to_process: List[str] = None):
+def process_sql_files(directory: str, tables_to_process: List[str] = None, tables_file: str = None):
     """
     Orchestrate SQL file finding and processing.
     
     Args:
         directory: Directory to search for SQL files
         tables_to_process: List of specific tables to process (if None, all tables are processed)
+        tables_file: Path to a file containing table names to process (one per line)
     """
     finder = SQLFileFinder(directory)
     processor = SQLProcessor()
+    
+    # If a tables file is provided, read tables from it
+    if tables_file:
+        try:
+            with open(tables_file, 'r', encoding='utf-8') as f:
+                tables_from_file = [line.strip() for line in f if line.strip()]
+            
+            # If tables_to_process is also provided, combine them
+            if tables_to_process:
+                tables_to_process = tables_to_process + tables_from_file
+            else:
+                tables_to_process = tables_from_file
+                
+            print(f"Using {len(tables_to_process)} tables from file: {tables_file}")
+        except Exception as e:
+            print(f"Error reading tables file {tables_file}: {e}")
     
     sql_files = finder.find_sql_files()
     print(f"Found {len(sql_files)} SQL files to process")
@@ -608,12 +625,16 @@ def process_sql_files(directory: str, tables_to_process: List[str] = None):
 
 if __name__ == "__main__":
     import sys
+    import argparse
     
-    if len(sys.argv) < 2:
-        print("Usage: python sql_cleaner.py <directory> [table1 table2 ...]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Process SQL files to remove specified tables.')
+    parser.add_argument('directory', help='Directory to search for SQL files')
+    parser.add_argument('--tables', nargs='*', help='Specific tables to process')
+    parser.add_argument('--tables-file', help='Path to a file containing table names to process (one per line)')
     
-    directory = sys.argv[1]
-    tables = sys.argv[2:] if len(sys.argv) > 2 else None
+    args = parser.parse_args()
     
-    process_sql_files(directory, tables) 
+    if not args.tables and not args.tables_file:
+        print("Warning: No tables specified. Either provide tables via --tables or --tables-file")
+    
+    process_sql_files(args.directory, args.tables, args.tables_file) 
