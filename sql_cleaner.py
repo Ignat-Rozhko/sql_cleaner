@@ -465,6 +465,254 @@ class SQLProcessor:
         
         return content
     
+    def remove_where_conditions(self, content: str, table_name: str) -> str:
+        """
+        Remove WHERE conditions that reference the specified table.
+        
+        Args:
+            content: SQL content as a string
+            table_name: Name of the table to remove from WHERE conditions
+            
+        Returns:
+            SQL content with WHERE conditions referencing the table removed
+        """
+        # First, find all aliases for this table
+        aliases = self._find_table_aliases(content, table_name)
+        
+        # Also find columns that are likely references to the table (like company_id)
+        potential_reference_columns = [f"{table_name}_id"]
+        
+        # Process SQL statements individually for better handling
+        statements = self._split_into_statements(content)
+        results = []
+        
+        for statement in statements:
+            # Skip empty statements
+            if not statement.strip():
+                results.append(statement)
+                continue
+            
+            # First try to find the main SQL structure with ORDER BY outside of WHERE
+            sql_structure = re.match(
+                r'(.*?)\s+WHERE\s+(.+?)(?:\s+(ORDER\s+BY.+?))?(;|$)',
+                statement,
+                re.IGNORECASE | re.DOTALL
+            )
+            
+            if not sql_structure:
+                # No WHERE clause in this statement
+                results.append(statement)
+                continue
+                
+            before_where = sql_structure.group(1)  # Everything before WHERE
+            where_conditions = sql_structure.group(2)  # The conditions part
+            order_by_clause = sql_structure.group(3) or ""  # ORDER BY clause if exists
+            statement_end = sql_structure.group(4)  # Semicolon or end of string
+            
+            # Split into individual conditions
+            condition_parts = self._split_where_conditions(where_conditions)
+            
+            # Analyze each condition to see if it references our table
+            filtered_condition_parts = []
+            for condition in condition_parts:
+                # Check if condition references our target table by name
+                if re.search(rf'(?:^|\W){re.escape(table_name)}\.', condition, re.IGNORECASE):
+                    continue
+                
+                # Check if condition references one of our aliases
+                should_remove = False
+                for alias in aliases:
+                    if re.search(rf'(?:^|\W){re.escape(alias)}\.', condition, re.IGNORECASE):
+                        should_remove = True
+                        break
+                
+                # Check for potential reference columns
+                for col in potential_reference_columns:
+                    # Looking for table_id = '...' or alias.table_id = '...'
+                    if re.search(rf'(?:^|\W)(?:\w+\.)?{re.escape(col)}\s*(?:=|!=|<>|>|<|>=|<=|IS|IN|LIKE)', 
+                                 condition, re.IGNORECASE):
+                        should_remove = True
+                        break
+                
+                if should_remove:
+                    continue
+                
+                # If we got here, keep this condition
+                filtered_condition_parts.append(condition)
+                
+            # Build the new statement
+            if not filtered_condition_parts:
+                # No conditions left, remove the WHERE clause entirely
+                modified_statement = before_where
+                if order_by_clause:
+                    modified_statement += f" {order_by_clause}"
+                modified_statement += statement_end
+            else:
+                # Reconstruct the WHERE clause with remaining conditions
+                new_where_conditions = ' AND '.join(filtered_condition_parts)
+                
+                # Create the new WHERE clause with proper formatting
+                modified_statement = f"{before_where} WHERE {new_where_conditions}"
+                if order_by_clause:
+                    modified_statement += f" {order_by_clause}"
+                modified_statement += statement_end
+            
+            results.append(modified_statement)
+        
+        # Join the results back into a single string
+        return ''.join(results)
+    
+    def _split_into_statements(self, content: str) -> List[str]:
+        """
+        Split SQL content into individual statements.
+        
+        Args:
+            content: SQL content as a string
+            
+        Returns:
+            List of SQL statements
+        """
+        # Normalize line endings
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+        
+        statements = []
+        current_statement = ""
+        in_string = False
+        string_delimiter = None
+        
+        i = 0
+        while i < len(content):
+            char = content[i]
+            
+            # Handle string literals
+            if char in ("'", '"'):
+                if not in_string:
+                    in_string = True
+                    string_delimiter = char
+                elif string_delimiter == char and (i == 0 or content[i-1] != '\\'):
+                    in_string = False
+                    string_delimiter = None
+            
+            # Add character to current statement
+            current_statement += char
+            
+            # Check for semicolon outside of strings
+            if char == ';' and not in_string:
+                statements.append(current_statement)
+                current_statement = ""
+            
+            i += 1
+        
+        # Add the last statement if there is one
+        if current_statement:
+            statements.append(current_statement)
+        
+        return statements
+    
+    def _find_table_aliases(self, content: str, table_name: str) -> List[str]:
+        """
+        Find all aliases for a specified table in the SQL content.
+        
+        Args:
+            content: SQL content as a string
+            table_name: Name of the table to find aliases for
+            
+        Returns:
+            List of aliases for the table
+        """
+        aliases = []
+        table_name_pattern = re.escape(table_name)
+        
+        # Find patterns like "FROM table_name [AS] alias" or "JOIN table_name [AS] alias"
+        alias_patterns = [
+            # FROM table AS alias or FROM table alias
+            rf'FROM\s+{table_name_pattern}(?:\s+AS)?\s+(\w+)(?:\s|,|$)',
+            # JOIN table AS alias or JOIN table alias
+            rf'JOIN\s+{table_name_pattern}(?:\s+AS)?\s+(\w+)(?:\s|,|$)',
+            # FROM schema.table AS alias or FROM schema.table alias
+            rf'FROM\s+\w+\.{table_name_pattern}(?:\s+AS)?\s+(\w+)(?:\s|,|$)',
+            # JOIN schema.table AS alias or JOIN schema.table alias
+            rf'JOIN\s+\w+\.{table_name_pattern}(?:\s+AS)?\s+(\w+)(?:\s|,|$)'
+        ]
+        
+        for pattern in alias_patterns:
+            for match in re.finditer(pattern, content, re.IGNORECASE):
+                aliases.append(match.group(1))
+        
+        return aliases
+    
+    def _split_where_conditions(self, where_conditions: str) -> List[str]:
+        """
+        Split WHERE conditions into individual condition parts, respecting parentheses and operators.
+        
+        Args:
+            where_conditions: The conditions part of a WHERE clause
+            
+        Returns:
+            List of individual condition parts
+        """
+        conditions = []
+        current_condition = ""
+        nesting_level = 0
+        in_string = False
+        string_delimiter = None
+        i = 0
+        
+        while i < len(where_conditions):
+            char = where_conditions[i]
+            
+            # Handle string literals
+            if char in ("'", '"'):
+                if not in_string:
+                    in_string = True
+                    string_delimiter = char
+                elif string_delimiter == char and (i == 0 or where_conditions[i-1] != '\\'):
+                    in_string = False
+                    string_delimiter = None
+            
+            # Skip processing if in a string
+            if in_string:
+                current_condition += char
+                i += 1
+                continue
+            
+            # Handle parentheses to respect nesting
+            if char == '(':
+                nesting_level += 1
+                current_condition += char
+            elif char == ')':
+                nesting_level -= 1
+                current_condition += char
+            
+            # If at level 0, check for AND/OR operators to split the conditions
+            elif nesting_level == 0 and i+2 < len(where_conditions):
+                # Look for " AND " or " OR " as separators
+                next_5_chars = where_conditions[i:i+5].upper()
+                if next_5_chars.startswith(' AND '):
+                    if current_condition.strip():
+                        conditions.append(current_condition.strip())
+                    current_condition = ""
+                    i += 5
+                    continue
+                elif next_5_chars.startswith(' OR '):
+                    if current_condition.strip():
+                        conditions.append(current_condition.strip())
+                    current_condition = ""
+                    i += 4
+                    continue
+                else:
+                    current_condition += char
+            else:
+                current_condition += char
+            
+            i += 1
+        
+        # Add the last condition if there is one
+        if current_condition.strip():
+            conditions.append(current_condition.strip())
+        
+        return conditions
+    
     def _split_with_nested_commas(self, text: str) -> List[str]:
         """
         Split a string by commas, respecting nested structures like parentheses.
@@ -537,6 +785,7 @@ class SQLProcessor:
         modified_content = content
         content_changed = False
         
+        # First pass: Remove all direct and reference inserts
         for table in tables:
             # Process each table until all occurrences are handled
             while True:
@@ -566,6 +815,13 @@ class SQLProcessor:
                 # Check if the content changed in this iteration
                 if previous_content == modified_content:
                     break
+        
+        # Second pass: Remove WHERE conditions referencing the tables
+        for table in tables:
+            previous_content = modified_content
+            modified_content = self.remove_where_conditions(modified_content, table)
+            if previous_content != modified_content:
+                content_changed = True
         
         # Only clean up empty lines if we actually made changes
         if content_changed:
