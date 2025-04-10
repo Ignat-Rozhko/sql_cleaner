@@ -1,8 +1,16 @@
 import unittest
-from sql_cleaner import SQLProcessor
+import sys
+import os
+
+# Get the absolute path of the parent directory (the sql_cleaner package)
+PACKAGE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(os.path.join(PACKAGE_ROOT, '..')))
+
+from sql_cleaner.processor.sql_processor import SQLProcessor
 
 
-class TestSQLProcessor(unittest.TestCase):
+class TestInsertStatements(unittest.TestCase):
     def setUp(self):
         self.processor = SQLProcessor()
         
@@ -17,7 +25,7 @@ class TestSQLProcessor(unittest.TestCase):
         self.assertEqual(tables, expected_tables)
         
     def test_direct_insert_removal(self):
-        # Test removal of direct insert statements for a specific table
+        """Test removal of direct insert statements for a specific table"""
         sql_content = """
         insert into table1 (col1, col2) values (1, 2);
         INSERT INTO table2 (col1, col2) VALUES (3, 4);
@@ -34,7 +42,7 @@ class TestSQLProcessor(unittest.TestCase):
         self.assertIn("table2", processed.lower())
         
     def test_multiline_direct_insert_removal(self):
-        # Test removal of multiline direct insert statements
+        """Test removal of multiline direct insert statements"""
         sql_content = """
         insert into table1 (col1, col2) 
         values (1, 2);
@@ -59,7 +67,7 @@ class TestSQLProcessor(unittest.TestCase):
         self.assertIn("INSERT INTO table2", processed)
         
     def test_reference_insert_modification(self):
-        # Test modification of insert statements referencing a table
+        """Test modification of insert statements referencing a table"""
         sql_content = """
         insert into other_table (id, name, table1_id, created_date)
         values (1, 'test', 100, '2022-01-01');
@@ -79,7 +87,7 @@ class TestSQLProcessor(unittest.TestCase):
         self.assertNotIn("100", processed_no_spaces)
         
     def test_complex_case_with_company_table(self):
-        # Test with a real example similar to the provided SQL files
+        """Test with a real example similar to the provided SQL files"""
         sql_content = """
         insert into company (id, name, tenant_id, version, created_by, created_date, last_modified_date)
         values ('edbc3c83-8721-8982-2aed-60aa2cf67022', 'organization1', '1', 1, 'account1', '2022-01-01 00:00:00',
@@ -126,7 +134,7 @@ class TestSQLProcessor(unittest.TestCase):
         self.assertNotIn("'bdbc3c83-8721-8982-2aed-60aa2cf67022'", processed.lower())
         
     def test_price_table_processing(self):
-        # Test with a price table example
+        """Test with a price table example"""
         sql_content = """
         insert into price (id, product_id, price_type_id, value, version)
         values ('5fbb8a8a-e527-3775-5f49-1f15afb2d919', '93b35ec7-ce46-5444-ec49-a6e563dedc45',
@@ -148,7 +156,7 @@ class TestSQLProcessor(unittest.TestCase):
         self.assertNotIn("price_id", processed.lower())
         
     def test_multi_value_insert(self):
-        # Test processing a multi-value INSERT statement
+        """Test processing a multi-value INSERT statement"""
         sql_content = """
         INSERT INTO company (id, name, tenant_id, version)
         VALUES ('c276c9f6-7da6-4622-818b-b1d837fc8142', 'ТОО "Трэйд"', 'example', 1),
@@ -160,24 +168,20 @@ class TestSQLProcessor(unittest.TestCase):
         """
         
         # Test direct multi-value INSERT removal
-        processed1 = self.processor.process_sql_content(sql_content, ['company'])
+        processed = self.processor.process_sql_content(sql_content, ['company'])
         
         # Direct insert into company should be removed
-        self.assertNotIn("company (id", processed1.lower())
+        self.assertNotIn("company (id", processed.lower())
         
         # But product insert should remain
-        self.assertIn("product", processed1.lower())
-        
-        # Test reference removal in multi-value INSERT
-        processed2 = self.processor.process_sql_content(sql_content, ['company'])
+        self.assertIn("product", processed.lower())
         
         # Company_id should be removed from product insert
-        self.assertIn("product", processed2.lower())
-        self.assertNotIn("company_id", processed2.lower())
+        self.assertNotIn("company_id", processed.lower())
         
         # Check that the values are correctly removed as well
-        self.assertNotIn("c276c9f6-7da6-4622-818b-b1d837fc8142", processed2)
-        self.assertNotIn("c276c9f6-7da6-4622-818b-b1d837fc9253", processed2)
+        self.assertNotIn("c276c9f6-7da6-4622-818b-b1d837fc8142", processed)
+        self.assertNotIn("c276c9f6-7da6-4622-818b-b1d837fc9253", processed)
 
 
 if __name__ == '__main__':

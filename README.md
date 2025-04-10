@@ -7,25 +7,65 @@ A Python utility for cleaning SQL files by removing specific table inserts and r
 - Recursively finds SQL files in a directory
 - Removes direct INSERT statements for specified tables
 - Removes references to specified tables in other INSERT statements
+- Removes WHERE conditions related to specified tables
 - Handles multi-value INSERT statements (e.g., `VALUES (...), (...), (...)`)
 - Preserves the structure of SQL files
 - Works with complex SQL statements and maintains formatting
+
+## Project Structure
+
+```
+sql_cleaner/
+├── __init__.py
+├── __main__.py
+├── cli.py
+├── processor/
+│   ├── __init__.py
+│   ├── file_finder.py
+│   ├── handler.py
+│   ├── insert_handler.py
+│   ├── sql_processor.py
+│   ├── utils.py
+│   └── where_handler.py
+└── tests/
+    ├── __init__.py
+    ├── test_insert_statements.py
+    └── test_where_conditions.py
+```
+
+## Installation
+
+```bash
+# Install from source
+pip install .
+```
 
 ## Usage
 
 ### Command Line
 
 ```bash
-python sql_cleaner.py <directory> [table1 table2 ...]
+# Using the installed CLI tool
+sql_cleaner <directory> [table1 table2 ...]
+
+# Using Python module directly
+python -m sql_cleaner <directory> [table1 table2 ...]
 ```
 
 - `<directory>`: Directory to search for SQL files recursively
 - `[table1 table2 ...]`: Optional list of tables to process (if not provided, all tables found will be processed)
 
+You can also specify tables from a file:
+
+```bash
+sql_cleaner <directory> --tables-file deleted-tables.txt
+```
+
 ### Programmatic Usage
 
 ```python
-from sql_cleaner import SQLFileFinder, SQLProcessor
+from sql_cleaner.processor.file_finder import SQLFileFinder
+from sql_cleaner.processor.sql_processor import SQLProcessor
 
 # Find SQL files
 finder = SQLFileFinder('/path/to/sql/files')
@@ -49,7 +89,7 @@ with open(sql_files[0], 'w', encoding='utf-8') as f:
 Run the tests using:
 
 ```bash
-python -m unittest test_sql_processor.py
+python -m unittest discover -s sql_cleaner.tests
 ```
 
 ## Examples
@@ -73,7 +113,18 @@ The tool is designed to:
    insert into price_change (id, value) values (1, 100);
    ```
 
-3. Handle multi-value INSERT statements:
+3. Remove WHERE conditions related to specified tables:
+   ```sql
+   -- Before:
+   SELECT * FROM product p
+   WHERE p.price > 0 AND target_id = 5;
+   
+   -- After:
+   SELECT * FROM product p
+   WHERE p.price > 0;
+   ```
+
+4. Handle multi-value INSERT statements:
    ```sql
    -- Before:
    INSERT INTO product (id, name, company_id, version)
