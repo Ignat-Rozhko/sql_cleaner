@@ -77,9 +77,14 @@ class WhereHandler(SQLHandler):
             # Process the WHERE conditions
             processed_conditions = self._process_complex_where_conditions(where_conditions, table_name, aliases, reference_columns)
             
+            # Clean up any leading/trailing AND/OR
+            if processed_conditions:
+                processed_conditions = re.sub(r'^\s*(AND|OR)\s+', '', processed_conditions, flags=re.IGNORECASE)
+                processed_conditions = re.sub(r'\s+(AND|OR)\s*$', '', processed_conditions, flags=re.IGNORECASE)
+            
             # Build the new statement
-            if not processed_conditions:
-                # No conditions left, remove the WHERE clause entirely
+            if not processed_conditions or processed_conditions.strip() in ["NOT", "AND", "OR"]:
+                # No conditions left or just operator keywords without expressions, remove the WHERE clause entirely
                 modified_statement = before_where
                 if order_by_clause:
                     modified_statement += f" {order_by_clause}"
@@ -120,6 +125,21 @@ class WhereHandler(SQLHandler):
         Returns:
             Processed WHERE conditions, or empty string if all conditions should be removed
         """
+        # Special handling for NOT operator
+        not_match = re.match(r'^NOT\s+\((.*)\)$', where_conditions.strip(), re.IGNORECASE)
+        if not_match:
+            inner_condition = not_match.group(1).strip()
+            # Check if the inner condition references the table
+            if self._condition_references_table(inner_condition, table_name, aliases, reference_columns):
+                # Process the inner condition
+                processed_inner = self._process_complex_where_conditions(inner_condition, table_name, aliases, reference_columns)
+                if not processed_inner or processed_inner.strip() == "":
+                    # If inner condition is empty after processing, remove the entire NOT expression
+                    return ""
+                else:
+                    # Return the NOT with the processed inner condition
+                    return f"NOT ({processed_inner})"
+        
         # Handle BETWEEN conditions before other processing
         between_pattern = re.compile(r'(\w+(?:\.\w+)?)\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)(?=\s+AND|\s*$|\s*;)', re.IGNORECASE)
         between_matches = list(between_pattern.finditer(where_conditions))
@@ -148,11 +168,16 @@ class WhereHandler(SQLHandler):
         if not where_conditions.strip():
             return ""
         
+        # Check if the condition doesn't reference the table at all - if so, return it as is
+        # This preserves complex logic with AND/OR operators when they don't reference our target tables
+        if not self._condition_references_table(where_conditions, table_name, aliases, reference_columns):
+            return where_conditions
+            
         # Handle conditions within parentheses recursively
         paren_pattern = r'\(([^()]*(?:\([^()]*\)[^()]*)*)\)'
         
         # Limit the number of recursion to avoid infinite loops
-        max_recursion = 100
+        max_recursion = 10
         recursion_count = 0
         
         while re.search(paren_pattern, where_conditions) and recursion_count < max_recursion:
@@ -186,16 +211,20 @@ class WhereHandler(SQLHandler):
         if not condition.strip():
             return ""
             
-        # If the condition only references the target table, remove it entirely
-        if self._condition_references_table(condition, table_name, aliases, reference_columns):
-            # Check if it's a simple condition (no AND/OR)
-            if " AND " not in condition.upper() and " OR " not in condition.upper():
-                return ""
+        # If the condition only contains table references and no AND/OR, remove it entirely
+        if self._condition_references_table(condition, table_name, aliases, reference_columns) and \
+           " AND " not in condition.upper() and " OR " not in condition.upper():
+            return ""
         
         # Process the condition
         processed = self._process_and_or_conditions(condition, table_name, aliases, reference_columns)
         
-        if not processed:
+        # Clean up any extraneous AND/OR operators
+        if processed:
+            processed = re.sub(r'^\s*(AND|OR)\s+', '', processed, flags=re.IGNORECASE)
+            processed = re.sub(r'\s+(AND|OR)\s*$', '', processed, flags=re.IGNORECASE)
+        
+        if not processed or processed.strip() in ["AND", "OR"]:
             return ""
         else:
             return f"({processed})"
@@ -220,6 +249,11 @@ class WhereHandler(SQLHandler):
         if not where_conditions:
             return ""
             
+        # Check if the condition doesn't reference the table at all - if so, return it as is
+        # This preserves complex logic with AND/OR operators when they don't reference our target tables
+        if not self._condition_references_table(where_conditions, table_name, aliases, reference_columns):
+            return where_conditions
+            
         # First, try to split by OR
         or_parts = self._split_by_operator(where_conditions, r'\bOR\b')
         
@@ -236,7 +270,7 @@ class WhereHandler(SQLHandler):
                     # If it's a complex condition with AND, process it further
                     if " AND " in part.upper():
                         processed_part = self._process_and_or_conditions(part, table_name, aliases, reference_columns)
-                        if processed_part:
+                        if processed_part and processed_part.strip() not in ["AND", "OR"]:
                             processed_parts.append(processed_part)
                 else:
                     # This part doesn't reference the target table, keep it as is

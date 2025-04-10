@@ -40,11 +40,25 @@ def process_sql_files(directory: str, tables_to_process: Optional[List[str]] = N
     
     # Load tables from file if specified
     if tables_file:
+        if not os.path.exists(tables_file):
+            print(f"Error: Tables file '{tables_file}' does not exist.", file=sys.stderr)
+            return
+            
         tables_from_file = read_tables_from_file(tables_file)
+        if not tables_from_file:
+            print(f"Warning: No tables found in '{tables_file}', skipping processing.", file=sys.stderr)
+            return
+            
         if tables_to_process:
             tables_to_process.extend(tables_from_file)
         else:
             tables_to_process = tables_from_file
+    
+    # If no tables are specified at all (neither via command line nor tables file),
+    # don't process any files to avoid accidentally deleting all content
+    if not tables_to_process:
+        print("Error: No tables specified for processing. Please specify tables via command line arguments or a tables file.", file=sys.stderr)
+        return
     
     # Find SQL files
     finder = SQLFileFinder(directory)
@@ -55,6 +69,7 @@ def process_sql_files(directory: str, tables_to_process: Optional[List[str]] = N
         return
     
     print(f"Found {len(sql_files)} SQL files to process.")
+    print(f"Target tables for processing: {', '.join(tables_to_process)}")
     
     # Create SQL processor
     processor = SQLProcessor()
@@ -65,19 +80,18 @@ def process_sql_files(directory: str, tables_to_process: Optional[List[str]] = N
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            # If no tables are specified, extract them from the content
-            if not tables_to_process:
-                tables_from_content = processor.extract_table_names(content)
-                if not tables_from_content:
-                    print(f"No tables found in file: {file_path}")
-                    continue
+            # Check if any of the specified tables exist in this file
+            tables_in_file = processor.extract_table_names(content)
+            common_tables = set(t.lower() for t in tables_to_process).intersection(
+                set(t.lower() for t in tables_in_file))
                 
-                tables_for_file = list(tables_from_content)
-            else:
-                tables_for_file = tables_to_process
+            # Only process files that contain at least one of the specified tables
+            if not common_tables:
+                print(f"No target tables found in file: {file_path}")
+                continue
             
             # Process the content
-            processed_content = processor.process_sql_content(content, tables_for_file)
+            processed_content = processor.process_sql_content(content, tables_to_process)
             
             # Write the processed content back to the file
             with open(file_path, 'w', encoding='utf-8') as f:

@@ -1,9 +1,10 @@
 from typing import List, Set
+import re
 
 from sql_cleaner.processor.handler import SQLHandler
 from sql_cleaner.processor.insert_handler import InsertHandler
 from sql_cleaner.processor.where_handler import WhereHandler
-from sql_cleaner.processor.utils import extract_table_names
+from sql_cleaner.processor.utils import extract_table_names, find_table_aliases
 
 
 class SQLProcessor:
@@ -52,5 +53,74 @@ class SQLProcessor:
         if not tables_to_process:
             tables_to_process = list(self.extract_table_names(content))
         
+        # Skip processing if none of the target tables exist in the content
+        if not self.content_contains_tables(content, tables_to_process):
+            return content
+        
         # Process the content through the chain of handlers
-        return self.handler.handle(content, tables_to_process) 
+        processed_content = self.handler.handle(content, tables_to_process)
+        
+        # If the processed content is empty, add a comment to preserve the file
+        if not processed_content.strip():
+            original_table_list = ", ".join(sorted(self.extract_table_names(content)))
+            return f"-- All content was removed by sql_cleaner\n-- Original tables: {original_table_list}\n"
+        
+        return processed_content
+    
+    def content_contains_tables(self, content: str, tables_to_process: List[str]) -> bool:
+        """
+        Check if any of the target tables exist in the content.
+        
+        Args:
+            content: SQL content to check
+            tables_to_process: List of tables to check for
+            
+        Returns:
+            True if any target table exists in the content, False otherwise
+        """
+        if not tables_to_process:
+            return False
+        
+        # Extract table names from the content
+        tables_in_content = self.extract_table_names(content)
+        
+        # Check if any tables to process exist in the content
+        for table in tables_to_process:
+            # Also check for potential references in WHERE clauses, JOINs, etc.
+            if table.lower() in tables_in_content or self._check_table_references(content, table):
+                return True
+        
+        return False
+    
+    def _check_table_references(self, content: str, table_name: str) -> bool:
+        """
+        Check for table references in ways not caught by extract_table_names.
+        
+        Args:
+            content: SQL content to check
+            table_name: Table name to check for
+            
+        Returns:
+            True if table is referenced, False otherwise
+        """
+        content_lower = content.lower()
+        table_lower = table_name.lower()
+        
+        # Check for table name in joins
+        if f"join {table_lower}" in content_lower:
+            return True
+        
+        # Check for table name in WHERE clauses (table reference or table_id reference)
+        if f"{table_lower}." in content_lower or f"{table_lower}_id" in content_lower:
+            return True
+        
+        # Check for direct table name mentioned in FROM clause
+        if re.search(rf'from\s+{table_lower}\b', content_lower):
+            return True
+        
+        # Find table aliases and check for references through them
+        for alias in find_table_aliases(content, table_name):
+            if f"{alias}." in content_lower:
+                return True
+        
+        return False 
