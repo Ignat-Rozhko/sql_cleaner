@@ -4,6 +4,7 @@ import re
 from sql_cleaner.processor.handler import SQLHandler
 from sql_cleaner.processor.insert_handler import InsertHandler
 from sql_cleaner.processor.where_handler import WhereHandler
+from sql_cleaner.processor.join_handler import JoinStatementHandler
 from sql_cleaner.processor.utils import extract_table_names, find_table_aliases
 
 
@@ -17,9 +18,10 @@ class SQLProcessor:
         # Create handlers
         insert_handler = InsertHandler()
         where_handler = WhereHandler()
-        
+        join_handler = JoinStatementHandler()
         # Set up the chain
         insert_handler.set_next(where_handler)
+        where_handler.set_next(join_handler)
         
         # The first handler in the chain
         self.handler = insert_handler
@@ -81,13 +83,25 @@ class SQLProcessor:
         if not tables_to_process:
             return False
         
+        content_lower = content.lower()
+        
         # Extract table names from the content
         tables_in_content = self.extract_table_names(content)
         
-        # Check if any tables to process exist in the content
+        # Check against each table to process (case insensitive)
         for table in tables_to_process:
-            # Also check for potential references in WHERE clauses, JOINs, etc.
-            if table.lower() in tables_in_content or self._check_table_references(content, table):
+            table_lower = table.lower()
+            
+            # Check if table exists in set of extracted tables
+            if table_lower in tables_in_content:
+                return True
+            
+            # Look for other references that might not be caught by extract_table_names
+            if self._check_table_references(content, table):
+                return True
+            
+            # Check for table ID references (like 'table_id' column)
+            if f"{table_lower}_id" in content_lower:
                 return True
         
         return False
@@ -116,6 +130,12 @@ class SQLProcessor:
         
         # Check for direct table name mentioned in FROM clause
         if re.search(rf'from\s+{table_lower}\b', content_lower):
+            return True
+        
+        # Check for direct table name mentioned in INSERT, UPDATE, DELETE
+        if re.search(rf'insert\s+into\s+{table_lower}\b', content_lower) or \
+           re.search(rf'update\s+{table_lower}\b', content_lower) or \
+           re.search(rf'delete\s+from\s+{table_lower}\b', content_lower):
             return True
         
         # Find table aliases and check for references through them

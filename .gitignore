@@ -26,3 +26,4 @@ htmlcov/
 
 # Misc
 .DS_Store 
+.deleted-tables.txt

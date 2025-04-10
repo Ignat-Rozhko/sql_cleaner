@@ -32,12 +32,35 @@ def extract_table_names(content: str) -> Set[str]:
     Returns:
         Set of table names
     """
-    # Simple approach - improve this with a more robust SQL parser if needed
+    content_lower = content.lower()
     tables = set()
     
     # Find table names from "insert into TABLE" statements
     insert_pattern = re.compile(r'insert\s+into\s+(\w+)', re.IGNORECASE)
     tables.update(match.group(1).lower() for match in insert_pattern.finditer(content))
+    
+    # Find table names from "FROM TABLE" statements
+    from_pattern = re.compile(r'from\s+(\w+)(?:\s+|$|\s*;)', re.IGNORECASE)
+    tables.update(match.group(1).lower() for match in from_pattern.finditer(content))
+    
+    # Find table names from "JOIN TABLE" statements
+    join_pattern = re.compile(r'join\s+(\w+)', re.IGNORECASE)
+    tables.update(match.group(1).lower() for match in join_pattern.finditer(content))
+    
+    # Find table names from "DELETE FROM TABLE" statements
+    delete_pattern = re.compile(r'delete\s+from\s+(\w+)', re.IGNORECASE)
+    tables.update(match.group(1).lower() for match in delete_pattern.finditer(content))
+    
+    # Find table names from "UPDATE TABLE" statements
+    update_pattern = re.compile(r'update\s+(\w+)', re.IGNORECASE)
+    tables.update(match.group(1).lower() for match in update_pattern.finditer(content))
+    
+    # Additional checks for references to fields with table_id suffix
+    table_id_pattern = re.compile(r'(\w+)_id', re.IGNORECASE)
+    potential_table_ids = [match.group(1) for match in table_id_pattern.finditer(content_lower)]
+    
+    # Add only singular form of potential tables referenced by *_id
+    tables.update(table_id for table_id in potential_table_ids)
     
     return tables
 
