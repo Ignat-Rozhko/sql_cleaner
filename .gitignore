@@ -1,29 +1,14 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Virtual environments
-venv/
-env/
-.env/
-
-# IDE files
-.idea/
 .vscode/
-*.swp
-*.swo
-
-# Testing
-.coverage
+.env/
+.venv/
 .pytest_cache/
-htmlcov/
-
-# Misc
+.coverage/
 .DS_Store 
+__pycache__/
+*.egg-info/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
 .deleted-tables.txt

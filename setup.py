@@ -11,5 +11,5 @@ setup(
     },
     python_requires='>=3.6',
     description="A tool for cleaning SQL files by removing specific table inserts and references",
-    author="SQL Cleaner Team",
+    author="Ignat Rozhko",
 ) 
