@@ -182,6 +182,29 @@ class TestInsertStatements(unittest.TestCase):
         # Check that the values are correctly removed as well
         self.assertNotIn("c276c9f6-7da6-4622-818b-b1d837fc8142", processed)
         self.assertNotIn("c276c9f6-7da6-4622-818b-b1d837fc9253", processed)
+        
+    def test_recycle_bin_id_removal(self):
+        """Test that recycle_bin_id is properly removed from complex multiline INSERT statements"""
+        sql_content = """
+        insert into public.currency (id, name, letter_code, digital_code, created_by, created_date,
+                                 last_modified_by,
+                                 last_modified_date, recycle_bin_id, version, tenant_id)
+        values (gen_random_uuid(), 'Тенге', 'KZT', '398', 'admin', '2022-02-22 22:22:22.000000', null,
+                '2022-02-22 22:22:22.000000', null, 1, ?);
+        """
+        
+        # Process the SQL with recycle_bin in tables_to_process
+        processed = self.processor.process_sql_content(sql_content, ['recycle_bin'])
+        
+        # Verify that recycle_bin_id column is removed
+        self.assertIn("currency", processed.lower())
+        self.assertNotIn("recycle_bin_id", processed.lower())
+        
+        # Verify the value structure is preserved correctly without extra parentheses
+        self.assertIn("values (gen_random_uuid(), 'Тенге', 'KZT', '398', 'admin', '2022-02-22 22:22:22.000000', null, '2022-02-22 22:22:22.000000', 1, ?);", processed)
+        
+        # Verify no duplicate closing parentheses
+        self.assertNotIn("));", processed)
 
 
 if __name__ == '__main__':
