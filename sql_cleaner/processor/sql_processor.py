@@ -5,6 +5,7 @@ from sql_cleaner.processor.handler import SQLHandler
 from sql_cleaner.processor.insert_handler import InsertHandler
 from sql_cleaner.processor.where_handler import WhereHandler
 from sql_cleaner.processor.join_handler import JoinHandler
+from sql_cleaner.processor.comment_removal_handler import CommentRemovalHandler
 from sql_cleaner.processor.utils import extract_table_names, find_table_aliases
 
 
@@ -16,15 +17,17 @@ class SQLProcessor:
     def __init__(self):
         """Initialize the chain of responsibility for SQL processing."""
         # Create handlers
+        comment_removal_handler = CommentRemovalHandler()
         insert_handler = InsertHandler()
         where_handler = WhereHandler()
         join_handler = JoinHandler(where_handler=where_handler)
         # Set up the chain
+        comment_removal_handler.set_next(insert_handler)
         insert_handler.set_next(where_handler)
         where_handler.set_next(join_handler)
         
         # The first handler in the chain
-        self.handler = insert_handler
+        self.handler = comment_removal_handler
     
     def extract_table_names(self, content: str) -> Set[str]:
         """
