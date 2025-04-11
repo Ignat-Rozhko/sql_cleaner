@@ -5,6 +5,8 @@ from sql_cleaner.processor.handler import SQLHandler
 from sql_cleaner.processor.insert_handler import InsertHandler
 from sql_cleaner.processor.where_handler import WhereHandler
 from sql_cleaner.processor.join_handler import JoinHandler
+from sql_cleaner.processor.delete_handler import DeleteHandler
+from sql_cleaner.processor.update_handler import UpdateHandler
 from sql_cleaner.processor.comment_removal_handler import CommentRemovalHandler
 from sql_cleaner.processor.utils import extract_table_names, find_table_aliases
 
@@ -20,12 +22,15 @@ class SQLProcessor:
         comment_removal_handler = CommentRemovalHandler()
         insert_handler = InsertHandler()
         where_handler = WhereHandler()
+        update_handler = UpdateHandler()
+        delete_handler = DeleteHandler()    
         join_handler = JoinHandler(where_handler=where_handler)
         # Set up the chain
         comment_removal_handler.set_next(insert_handler)
         insert_handler.set_next(where_handler)
         where_handler.set_next(join_handler)
-        
+        join_handler.set_next(delete_handler)
+        delete_handler.set_next(update_handler)
         # The first handler in the chain
         self.handler = comment_removal_handler
     
