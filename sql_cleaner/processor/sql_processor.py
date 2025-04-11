@@ -4,7 +4,7 @@ import re
 from sql_cleaner.processor.handler import SQLHandler
 from sql_cleaner.processor.insert_handler import InsertHandler
 from sql_cleaner.processor.where_handler import WhereHandler
-from sql_cleaner.processor.join_handler import JoinStatementHandler
+from sql_cleaner.processor.join_handler import JoinHandler
 from sql_cleaner.processor.utils import extract_table_names, find_table_aliases
 
 
@@ -18,7 +18,7 @@ class SQLProcessor:
         # Create handlers
         insert_handler = InsertHandler()
         where_handler = WhereHandler()
-        join_handler = JoinStatementHandler()
+        join_handler = JoinHandler(where_handler=where_handler)
         # Set up the chain
         insert_handler.set_next(where_handler)
         where_handler.set_next(join_handler)

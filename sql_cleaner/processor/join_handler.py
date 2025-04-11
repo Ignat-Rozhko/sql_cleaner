@@ -3,12 +3,23 @@ from typing import List
 
 from sql_cleaner.processor.handler import SQLHandler
 from sql_cleaner.processor.utils import split_into_statements, find_table_aliases
+from sql_cleaner.processor.where_handler import WhereHandler
 
 
-class JoinStatementHandler(SQLHandler):
+class JoinHandler(SQLHandler):
     """
     Handler for processing and removing JOIN statements related to specified tables.
+    Uses a WhereHandler dependency to clean up related WHERE conditions.
     """
+    def __init__(self, where_handler: WhereHandler):
+        """
+        Initialize the JoinHandler with a WhereHandler instance.
+        
+        Args:
+            where_handler: An instance of WhereHandler.
+        """
+        super().__init__()  # Call the parent class initializer
+        self.where_handler = where_handler
     
     def process(self, content: str, tables_to_process: List[str]) -> str:
         """
@@ -34,14 +45,15 @@ class JoinStatementHandler(SQLHandler):
     
     def _remove_direct_joins(self, content: str, table_name: str) -> str:
         """
-        Remove JOIN statements directly targeting the specified table.
+        Remove JOIN statements directly targeting the specified table and then
+        use the injected WhereHandler to clean up conditions related to the table's alias if found.
         
         Args:
             content: SQL content as a string
             table_name: Table name to remove joins for
             
         Returns:
-            SQL content with direct joins removed
+            SQL content with direct joins and related WHERE conditions removed
         """
         # Check if the content is a multi-line SQL statement
         has_multiline_format = '\n' in content
@@ -58,33 +70,48 @@ class JoinStatementHandler(SQLHandler):
                 
             # Process this statement to remove direct joins with the target table
             # Look for JOIN clauses with the target table (with or without ON clause)
+            # Capture the alias if present (group 2)
             join_pattern = re.compile(
-                rf'(\s+(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL|)?\s*JOIN\s+(?:public\.)?{table_name}\s*(?:AS\s+\w+|\s+\w+)?)(\s+ON\s+.+?|\s*)(?=\s+(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL|)?\s*JOIN|\s*$|\s*;|\s*WHERE|\s*GROUP|\s*ORDER|\s*HAVING)',
+                rf'(\s+(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL|)?\s*JOIN\s+(?:public\.)?{table_name}(?:\s+(?:AS\s+)?(\w+))?)(\s+ON\s+.+?|\s*)(?=\s+(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL|)?\s*JOIN|\s*$|\s*;|\s*WHERE|\s*GROUP|\s*ORDER|\s*HAVING)',
                 re.IGNORECASE | re.DOTALL
             )
             
             # Process all matches from the end to avoid index issues
             matches = list(join_pattern.finditer(stmt))
             
-            if not matches:
-                processed_statements.append(stmt)
-                continue
-                
-            # Replace each match with empty string
-            for match in reversed(matches):
-                join_clause = match.group(0)
-                stmt = stmt.replace(join_clause, "")
-                
-            # Clean up any duplicate spaces
-            stmt = re.sub(r'\s+', ' ', stmt).strip()
+            target_table_alias = None # Variable to store the alias
             
+            if matches:
+                # Replace each match with empty string and capture alias
+                for match in reversed(matches):
+                    join_clause = match.group(0)
+                    alias = match.group(2) # Group 2 captures the alias name
+
+                    if alias:
+                        target_table_alias = alias # Store the last found alias
+
+                    stmt = stmt.replace(join_clause, "")
+                
+                # Clean up any duplicate spaces after removing joins
+                stmt = re.sub(r'\s+', ' ', stmt).strip()
+
+            # If an alias was found for the removed table, use the injected WhereHandler to clean conditions
+            if target_table_alias:
+                # Process the statement to remove WHERE conditions related to the alias
+                # Note: WhereHandler.process expects a list of tables
+                stmt = self.where_handler.process(stmt, [target_table_alias]) 
+                # WhereHandler.process splits into statements again, but since we pass one, it's fine.
+                # It also adds extra newlines which we might need to clean up later if format is strict.
+
             processed_statements.append(stmt)
         
         # Join the statements based on original format
         if has_multiline_format:
-            result = '\n'.join(s for s in processed_statements if s.strip())
+            # Join statements; WhereHandler might add extra newlines, clean them up if needed
+            result = '\n'.join(s.strip() for s in processed_statements if s.strip()) 
         else:
-            result = ' '.join(s for s in processed_statements if s.strip())
+            # Join statements for single-line format
+            result = ' '.join(s.strip() for s in processed_statements if s.strip()) 
             
         return result
     

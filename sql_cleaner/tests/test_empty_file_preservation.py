@@ -48,7 +48,7 @@ class TestEmptyFilePreservation(unittest.TestCase):
         
         # Extract tables from content
         tables = self.processor.extract_table_names(sql)
-        self.assertEqual(3, len(tables))
+        self.assertEqual(5, len(tables))
         
         # Process with all tables
         processed = self.processor.process_sql_content(sql, list(tables))

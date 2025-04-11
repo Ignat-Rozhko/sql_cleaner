@@ -1,10 +1,10 @@
 import unittest
-from sql_cleaner.processor.join_handler import JoinStatementHandler
-
+from sql_cleaner.processor.join_handler import JoinHandler
+from sql_cleaner.processor.where_handler import WhereHandler
 
 class TestJoinStatementHandler(unittest.TestCase):
     def setUp(self):
-        self.handler = JoinStatementHandler()
+        self.handler = JoinHandler(where_handler=WhereHandler())
         self.tables_to_process = ["TARGET_TABLE", "PRODUCT_BALANCE_CHANGE"]
     
     def test_empty_tables_list(self):
@@ -115,6 +115,24 @@ class TestJoinStatementHandler(unittest.TestCase):
         sql = "SELECT * FROM table1 JOIN users ON users.id = TARGET_TABLE.user_id AND users.valid_id = valid_table.id"
         expected = "SELECT * FROM table1 JOIN users ON users.valid_id = valid_table.id"
         result = self.handler.process(sql, self.tables_to_process)
+        self.assertEqual(result, expected)
+
+    def test_join_alias_and_where_conditions(self):
+        sql = """
+        SELECT main_table.*
+        FROM main_table
+        JOIN TARGET_TABLE t ON t.id = main_table.tid
+        WHERE main_table.name = 'Example'
+        AND t.status = 'active';
+        """
+        expected = """
+        SELECT main_table.*
+        FROM main_table
+        WHERE main_table.name = 'Example';
+        """
+        result = self.handler.process(sql, self.tables_to_process)
+        result = ' '.join(result.split())
+        expected = ' '.join(expected.split())
         self.assertEqual(result, expected)
 
 
