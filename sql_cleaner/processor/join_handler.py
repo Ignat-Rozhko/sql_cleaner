@@ -2,7 +2,7 @@ import re
 from typing import List
 
 from sql_cleaner.processor.handler import SQLHandler
-from sql_cleaner.processor.utils import split_into_statements, find_table_aliases
+from sql_cleaner.processor.utils import split_into_statements, find_table_aliases, get_table_id_column
 from sql_cleaner.processor.where_handler import WhereHandler
 
 
@@ -141,7 +141,7 @@ class JoinHandler(SQLHandler):
                 
             # Process ON clauses that reference the target table
             aliases = find_table_aliases(stmt, table_name)
-            reference_column = f"{table_name}_id"
+            reference_column = get_table_id_column(table_name)
             
             # If no references to the table in the statement, keep it as is
             if (not any(f"{alias}." in stmt.lower() for alias in aliases) and 

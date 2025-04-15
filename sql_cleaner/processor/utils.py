@@ -177,4 +177,20 @@ def split_with_nested_commas(text: str) -> List[str]:
     if current_part.strip():
         result.append(current_part.strip())
     
-    return result 
+    return result
+
+
+def get_table_id_column(table_name: str) -> str:
+    """
+    Get the column name for a table's ID column.
+    If the table name ends with '_', just append 'id', otherwise append '_id'.
+    
+    Args:
+        table_name: Name of the table
+        
+    Returns:
+        Column name for the table's ID column
+    """
+    if table_name.endswith('_'):
+        return f"{table_name}id"
+    return f"{table_name}_id" 

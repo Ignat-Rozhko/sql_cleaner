@@ -4,7 +4,8 @@ from typing import List, Dict
 from sql_cleaner.processor.handler import SQLHandler
 from sql_cleaner.processor.utils import (
     split_into_statements,
-    find_table_aliases
+    find_table_aliases,
+    get_table_id_column
 )
 
 
@@ -72,7 +73,7 @@ class WhereHandler(SQLHandler):
             aliases = find_table_aliases(stmt, table_name)
             
             # Identify columns that could reference the table
-            reference_columns = [f"{table_name}_id"]
+            reference_columns = [get_table_id_column(table_name)]
             
             # Process the WHERE conditions
             processed_conditions = self._process_complex_where_conditions(where_conditions, table_name, aliases, reference_columns)
@@ -431,7 +432,7 @@ class WhereHandler(SQLHandler):
                 return True
         
         # Check for cases like p.target_id or product.target_id 
-        if re.search(rf'(?:^|\W)\w+\.{re.escape(table_name)}_id\b', condition, re.IGNORECASE):
+        if re.search(rf'(?:^|\W)\w+\.{re.escape(get_table_id_column(table_name))}\b', condition, re.IGNORECASE):
             return True
              
         return False 

@@ -2,7 +2,7 @@ import re
 from typing import Dict, List, Tuple
 
 from sql_cleaner.processor.handler import SQLHandler
-from sql_cleaner.processor.utils import split_into_statements, split_with_nested_commas
+from sql_cleaner.processor.utils import split_into_statements, split_with_nested_commas, get_table_id_column
 
 
 class InsertHandler(SQLHandler):
@@ -72,7 +72,7 @@ class InsertHandler(SQLHandler):
                 continue
                 
             # Check if this statement is an insert that references the target table
-            reference_column = f"{table_name}_id"
+            reference_column = get_table_id_column(table_name)
             if reference_column.lower() in stmt.lower():
                 # Process this statement to remove the reference
                 stmt = self._process_reference_insert(stmt, reference_column)
